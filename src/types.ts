@@ -32,7 +32,8 @@ export interface Server {
 export interface AppState {
   customers: Customer[];
   transactions: Transaction[];
-  servers: Server[]; // Mudança de string[] para Server[]
+  servers: Server[];
+  serverCredits: Record<string, number>;
   serverCosts?: Record<string, number>;
   auth: {
     username: string;

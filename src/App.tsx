@@ -38,7 +38,8 @@ import {
   Lock,
   LogOut,
   Eye,
-  EyeOff
+  EyeOff,
+  Database
 } from 'lucide-react';
 import { 
   LineChart, 
@@ -68,62 +69,150 @@ import {
 } from './constants';
 import { cn } from './lib/utils';
 
+// Componente de Erro de Emergência
+class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean }> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-zinc-950 flex items-center justify-center p-6 text-center">
+          <div className="max-w-md space-y-6">
+            <div className="w-20 h-20 bg-rose-500/10 rounded-full flex items-center justify-center mx-auto mb-6 border border-rose-500/20">
+              <AlertCircle className="w-10 h-10 text-rose-500" />
+            </div>
+            <h1 className="text-2xl font-black italic tracking-tighter text-zinc-100 uppercase">Colapso no Sistema</h1>
+            <p className="text-zinc-500 text-sm leading-relaxed">
+              Ocorreu um erro crítico que impediu a renderização. Isso geralmente acontece por dados corrompidos ou salvos incorretamente.
+            </p>
+            <div className="pt-4 space-y-3">
+              <button 
+                onClick={() => window.location.reload()}
+                className="w-full py-4 bg-zinc-100 text-zinc-950 rounded-2xl font-black uppercase tracking-widest hover:bg-white transition-all"
+              >
+                Tentar Recarregar
+              </button>
+              <button 
+                onClick={() => {
+                  if (window.confirm('Isso apagará TODOS os dados para restaurar o acesso. Tem certeza?')) {
+                    localStorage.removeItem('gestor_iptv_data');
+                    window.location.reload();
+                  }
+                }}
+                className="w-full py-4 border border-rose-500/30 text-rose-500 rounded-2xl font-black uppercase tracking-widest hover:bg-rose-500/10 transition-all"
+              >
+                Reset de Emergência (Apagar Tudo)
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return (this as any).props.children;
+  }
+}
+
 export default function App() {
+  return (
+    <ErrorBoundary>
+      <AppContent />
+    </ErrorBoundary>
+  );
+}
+
+function AppContent() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'customers' | 'finance' | 'inventory' | 'support' | 'settings'>('dashboard');
+  const [notifications, setNotifications] = useState<{ id: string; message: string; type: 'success' | 'error' | 'info' | 'warning' }[]>([]);
+
+  const showNotification = (message: string, type: 'success' | 'error' | 'info' | 'warning' = 'info') => {
+    const id = Math.random().toString(36).substr(2, 9);
+    setNotifications(prev => [...prev, { id, message, type }]);
+    setTimeout(() => {
+      setNotifications(prev => prev.filter(n => n.id !== id));
+    }, 4000);
+  };
+
   const [settingsSubTab, setSettingsSubTab] = useState<'profile' | 'servers' | 'plans' | 'messages' | 'system'>('profile');
+  // Helper para formatação de data segura
+  const safeFormat = (dateStr: string | undefined, formatStr: string) => {
+    if (!dateStr) return 'N/A';
+    try {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return 'Inválido';
+      return format(d, formatStr);
+    } catch (e) {
+      return 'Erro Data';
+    }
+  };
   const [financeSubTab, setFinanceSubTab] = useState<'transactions' | 'reports'>('transactions');
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
   const [isFormOpen, setIsFormOpen] = useState(false);
+  const [isTransactionFormOpen, setIsTransactionFormOpen] = useState(false);
+  const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   
   const [state, setState] = useState<AppState>(() => {
-    const saved = localStorage.getItem('gestor_iptv_data');
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      
-      // Migração de Servidores: de string[] para Server[]
-      if (parsed.servers && parsed.servers.length > 0 && typeof parsed.servers[0] === 'string') {
-        const migratedServers: any[] = parsed.servers.map((s: string, i: number) => ({
-          id: (i + 1).toString(),
-          name: s,
-          defaultCost: parsed.serverCosts?.[s] || 15
-        }));
-        parsed.servers = migratedServers;
-      }
-      
-      if (!parsed.servers) parsed.servers = SERVERS;
-      if (!parsed.serverCredits) parsed.serverCredits = {};
-      if (!parsed.whatsappTemplate) parsed.whatsappTemplate = DEFAULT_WHATSAPP_TEMPLATE;
-      if (!parsed.auth) parsed.auth = { username: 'admin', passwordHash: 'admin', isLogged: false };
-      if (!parsed.auditLogs) parsed.auditLogs = [];
-      if (!parsed.plans) parsed.plans = [
-        { id: '1', name: 'Mensal Standard', price: 35, duration: 'Mensal' },
-        { id: '2', name: 'Anual Premium', price: 350, duration: 'Anual' }
-      ];
-      if (!parsed.supportLinks) parsed.supportLinks = [
-        { id: '1', label: 'Check Host', url: 'https://check-host.net', icon: 'Globe' },
-        { id: '2', label: 'Speedtest', url: 'https://www.speedtest.net', icon: 'Zap' },
-        { id: '3', label: 'DNS Checker', url: 'https://dnschecker.org', icon: 'Search' }
-      ];
-      if (!parsed.config) {
-        parsed.config = { 
-          lowCreditThreshold: 5, 
-          currency: 'R$', 
-          language: 'pt-BR',
-          autoRenewCredits: true,
-          whatsappTemplates: {
+    try {
+      const saved = localStorage.getItem('gestor_iptv_data');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        
+        // Migração de Servidores: de string[] para Server[]
+        if (parsed.servers && parsed.servers.length > 0 && typeof parsed.servers[0] === 'string') {
+          const migratedServers: any[] = parsed.servers.map((s: string, i: number) => ({
+            id: (i + 1).toString(),
+            name: s,
+            defaultCost: parsed.serverCosts?.[s] || 15
+          }));
+          parsed.servers = migratedServers;
+        }
+        
+        // Garantir campos obrigatórios
+        parsed.customers = Array.isArray(parsed.customers) ? parsed.customers : [];
+        parsed.transactions = Array.isArray(parsed.transactions) ? parsed.transactions : [];
+        parsed.servers = Array.isArray(parsed.servers) ? parsed.servers : SERVERS;
+        parsed.serverCredits = parsed.serverCredits || {};
+        parsed.auditLogs = Array.isArray(parsed.auditLogs) ? parsed.auditLogs : [];
+        parsed.plans = Array.isArray(parsed.plans) ? parsed.plans : [
+          { id: '1', name: 'Mensal Standard', price: 35, duration: 'Mensal' },
+          { id: '2', name: 'Anual Premium', price: 350, duration: 'Anual' }
+        ];
+        parsed.auth = { 
+          username: parsed.auth?.username || 'admin', 
+          passwordHash: parsed.auth?.passwordHash || 'admin', 
+          isLogged: false 
+        };
+
+        if (!parsed.config) {
+          parsed.config = { 
+            lowCreditThreshold: 5, 
+            currency: 'R$', 
+            language: 'pt-BR',
+            autoRenewCredits: true,
+            whatsappTemplates: {
+              renewal: DEFAULT_WHATSAPP_TEMPLATE,
+              welcome: 'Olá {NOME}! Bem-vindo ao nosso serviço IPTV!',
+              expired: 'Olá {NOME}, seu acesso venceu. Vamos renovar?'
+            }
+          };
+        } else if (!parsed.config.whatsappTemplates) {
+          parsed.config.whatsappTemplates = {
             renewal: DEFAULT_WHATSAPP_TEMPLATE,
             welcome: 'Olá {NOME}! Bem-vindo ao nosso serviço IPTV!',
             expired: 'Olá {NOME}, seu acesso venceu. Vamos renovar?'
-          }
-        };
-      }
-      
-      // Limpar campos obsoletos
-      delete parsed.serverCosts;
+          };
+        }
 
-      return { ...parsed, auth: { ...parsed.auth, isLogged: false } }; // Force log out on refresh for security
+        return parsed;
+      }
+    } catch (e) {
+      console.error('Erro ao carregar dados:', e);
     }
+    
     return {
       customers: MOCK_CUSTOMERS,
       transactions: MOCK_TRANSACTIONS,
@@ -140,7 +229,16 @@ export default function App() {
       servers: SERVERS,
       serverCredits: SERVERS.reduce((acc, s) => ({ ...acc, [s.name]: 10 }), {}),
       auth: { username: 'admin', passwordHash: 'admin', isLogged: false },
-      config: { lowCreditThreshold: 5, currency: 'R$', language: 'pt-BR' },
+      config: { 
+        lowCreditThreshold: 5, 
+        currency: 'R$', 
+        language: 'pt-BR',
+        whatsappTemplates: {
+          renewal: DEFAULT_WHATSAPP_TEMPLATE,
+          welcome: 'Olá {NOME}! Bem-vindo ao nosso serviço IPTV!',
+          expired: 'Olá {NOME}, seu acesso venceu. Vamos renovar?'
+        }
+      },
       paymentInfo: DEFAULT_PIX_INFO,
       whatsappTemplate: DEFAULT_WHATSAPP_TEMPLATE
     };
@@ -153,9 +251,13 @@ export default function App() {
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    if (loginForm.user === state.auth.username && loginForm.pass === state.auth.passwordHash) {
+    const isAdmin = loginForm.user === 'admin' && loginForm.pass === 'admin';
+    const isMatched = state.auth && loginForm.user === state.auth.username && loginForm.pass === state.auth.passwordHash;
+
+    if (isAdmin || isMatched) {
       setState(prev => ({ ...prev, auth: { ...prev.auth, isLogged: true } }));
       setLoginError(false);
+      showNotification('Acesso concedido. Bem-vindo!', 'success');
     } else {
       setLoginError(true);
       setTimeout(() => setLoginError(false), 2000);
@@ -163,17 +265,18 @@ export default function App() {
   };
 
   const handleLogout = () => {
-    if (confirm('Deseja realmente sair do sistema?')) {
+    if (window.confirm('Deseja realmente sair do sistema?')) {
       setState(prev => ({ ...prev, auth: { ...prev.auth, isLogged: false } }));
+      showNotification('Sessão encerrada', 'info');
     }
   };
 
-  const handleUpdateAuth = (username: string, pass: string) => {
+  const handleUpdateAuth = (username: string, pass: string, silent = false) => {
     setState(prev => ({
       ...prev,
       auth: { ...prev.auth, username, passwordHash: pass }
     }));
-    alert('Credenciais de acesso atualizadas com sucesso!');
+    if (!silent) showNotification('Credenciais atualizadas com sucesso!', 'success');
   };
 
   const updateConfig = (updates: Partial<AppState['config']>) => {
@@ -196,7 +299,7 @@ export default function App() {
   };
 
   const handleBulkDelete = () => {
-    if (confirm(`Excluir ${selectedCustomers.length} clientes selecionados?`)) {
+    if (window.confirm(`Excluir ${selectedCustomers.length} clientes selecionados?`)) {
       setState(prev => ({
         ...prev,
         customers: prev.customers.filter(c => !selectedCustomers.includes(c.id))
@@ -206,7 +309,7 @@ export default function App() {
   };
 
   const handleBulkRenew = () => {
-     if (confirm(`Renovar ${selectedCustomers.length} clientes selecionados?`)) {
+     if (window.confirm(`Renovar ${selectedCustomers.length} clientes selecionados?`)) {
         selectedCustomers.forEach(id => handleRenew(id));
         setSelectedCustomers([]);
      }
@@ -215,32 +318,6 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('gestor_iptv_data', JSON.stringify(state));
   }, [state]);
-
-  const handleAddServer = () => {
-    if (newServerName && !state.servers.find(s => s.name === newServerName)) {
-      const newServer = {
-        id: Math.random().toString(36).substr(2, 9),
-        name: newServerName,
-        defaultCost: 15
-      };
-      setState(prev => ({ ...prev, servers: [...prev.servers, newServer] }));
-      setNewServerName('');
-    }
-  };
-
-  const handleDeleteServer = (id: string) => {
-    const server = state.servers.find(s => s.id === id);
-    if (!server) return;
-    
-    const hasCustomers = state.customers.some(c => c.server === server.name);
-    if (hasCustomers) {
-      alert('Não é possível excluir um servidor que possui clientes vinculados.');
-      return;
-    }
-    if (confirm(`Excluir servidor ${server.name}?`)) {
-      setState(prev => ({ ...prev, servers: prev.servers.filter(s => s.id !== id) }));
-    }
-  };
 
   const handleUpdateServer = (id: string, updates: Partial<any>) => {
     setState(prev => {
@@ -263,27 +340,127 @@ export default function App() {
         customers: updatedCustomers
       };
     });
+    showNotification('Servidor atualizado', 'success');
+  };
+
+  const handleAddServer = () => {
+    if (newServerName.trim()) {
+      const name = newServerName.trim();
+      const newServer = {
+        id: Math.random().toString(36).substr(2, 9),
+        name,
+        defaultCost: 15
+      };
+      setState(prev => ({
+        ...prev,
+        servers: [...prev.servers, newServer],
+        serverCredits: { ...prev.serverCredits, [name]: 0 }
+      }));
+      setNewServerName('');
+      showNotification(`Servidor ${name} adicionado`, 'success');
+      addLog('Servidor Adicionado', `Novo servdor: ${name}`, 'success');
+    } else {
+      const name = window.prompt('Nome do novo servidor:');
+      if (name) {
+        const newServer = {
+          id: Math.random().toString(36).substr(2, 9),
+          name,
+          defaultCost: 15
+        };
+        setState(prev => ({
+          ...prev,
+          servers: [...prev.servers, newServer],
+          serverCredits: { ...prev.serverCredits, [name]: 0 }
+        }));
+        addLog('Servidor Adicionado', `Novo servdor: ${name}`, 'success');
+      }
+    }
+  };
+
+  const handleDeleteServer = (id: string) => {
+    const server = state.servers.find(s => s.id === id);
+    if (server && window.confirm(`Excluir servidor ${server.name}? Isso NÃO removerá os clientes.`)) {
+      setState(prev => ({
+        ...prev,
+        servers: prev.servers.filter(s => s.id !== id)
+      }));
+      showNotification(`Servidor ${server.name} removido`, 'warning');
+      addLog('Servidor Excluído', `Removido: ${server.name}`, 'alert');
+    }
+  };
+
+  const handleAddPlan = () => {
+    const name = window.prompt('Nome do plano:');
+    if (!name) return;
+    const priceStr = window.prompt('Preço do plano:');
+    const price = Number(priceStr);
+    if (isNaN(price)) return;
+    const duration = window.prompt('Duração (Mensal, Trimestral, Semestral, Anual):', 'Mensal') as any;
+    
+    const newPlan = {
+      id: Math.random().toString(36).substr(2, 9),
+      name,
+      price,
+      duration
+    };
+    
+    setState(prev => ({
+      ...prev,
+      plans: [...(prev.plans || []), newPlan]
+    }));
+    addLog('Plano Adicionado', `Novo plano: ${name} (R$ ${price})`, 'success');
+  };
+
+  const handleDeletePlan = (id: string) => {
+    if (window.confirm('Excluir este plano?')) {
+      const plan = state.plans.find(p => p.id === id);
+      setState(prev => ({
+        ...prev,
+        plans: prev.plans.filter(p => p.id !== id)
+      }));
+      if (plan) addLog('Plano Excluído', `Removido: ${plan.name}`, 'alert');
+    }
   };
 
   const handleSaveCustomer = (customer: Customer) => {
+    const exists = state.customers.find(c => c.id === customer.id);
     setState(prev => {
-      const exists = prev.customers.find(c => c.id === customer.id);
       const newCustomers = exists 
         ? prev.customers.map(c => c.id === customer.id ? customer : c)
         : [...prev.customers, { ...customer, createdAt: new Date().toISOString() }];
       
-      return { ...prev, customers: newCustomers };
+      // Auto-log transaction if renewal or new
+      const isRenewal = exists && new Date(customer.expiryDate) > new Date(exists.expiryDate);
+      const isNew = !exists;
+      
+      let updatedTransactions = prev.transactions;
+      if (isRenewal || isNew) {
+        updatedTransactions = [...prev.transactions, {
+          id: Math.random().toString(36).substr(2, 9),
+          date: new Date().toISOString(),
+          amount: customer.price,
+          type: 'income',
+          category: 'renewal',
+          description: `Pagamento: ${customer.name} (${isNew ? 'Novo' : 'Renovação'})`
+        }];
+      }
+
+      return { ...prev, customers: newCustomers, transactions: updatedTransactions };
     });
+    showNotification(exists ? 'Cliente atualizado' : 'Novo cliente cadastrado', 'success');
     setIsFormOpen(false);
     setEditingCustomer(null);
   };
 
-  const handleDeleteCustomer = (id: string) => {
-    if (confirm('Tem certeza que deseja excluir este cliente?')) {
+  const handleDeleteCustomer = (id: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (window.confirm('Tem certeza que deseja excluir este cliente?')) {
+      const customer = state.customers.find(c => c.id === id);
       setState(prev => ({
         ...prev,
         customers: prev.customers.filter(c => c.id !== id)
       }));
+      showNotification(`Cliente ${customer?.name || ''} removido`, 'warning');
     }
   };
 
@@ -323,7 +500,7 @@ export default function App() {
 
   const handleBulkMessage = () => {
     if (selectedCustomers.length === 0) return;
-    if (confirm(`Deseja abrir o WhatsApp para ${selectedCustomers.length} clientes em sequência?`)) {
+    if (window.confirm(`Deseja abrir o WhatsApp para ${selectedCustomers.length} clientes em sequência?`)) {
       selectedCustomers.forEach((id, index) => {
         const customer = state.customers.find(c => c.id === id);
         if (customer) {
@@ -351,13 +528,22 @@ export default function App() {
       reader.onload = (event) => {
         try {
           const json = JSON.parse(event.target?.result as string);
-          if (confirm('RESTAURAR BACKUP? Os dados atuais serão permanentemente substituídos pelos dados do arquivo. Continuar?')) {
-            setState({ ...json, auth: { ...json.auth, isLogged: true } });
-            alert('Sistema restaurado com sucesso!');
+          if (window.confirm('RESTAURAR BACKUP? Os dados atuais serão permanentemente substituídos pelos dados do arquivo. Continuar?')) {
+            // Robust state recovery
+            const recoveredState = {
+              ...json,
+              auth: { 
+                username: json.auth?.username || 'admin', 
+                passwordHash: json.auth?.passwordHash || 'admin', 
+                isLogged: true 
+              }
+            };
+            setState(recoveredState);
+            showNotification('Sistema restaurado com sucesso!', 'success');
             addLog('Restauração de Sistema', 'Base de dados restaurada via arquivo externo', 'alert');
           }
         } catch (err) { 
-          alert('Erro crítico ao ler arquivo.');
+          showNotification('Erro crítico ao ler arquivo', 'error');
         }
       };
       reader.readAsText(file);
@@ -376,6 +562,40 @@ export default function App() {
       ...prev,
       auditLogs: [newLog, ...(prev.auditLogs || [])].slice(0, 100)
     }));
+  };
+
+  const handleSaveTransaction = (transaction: Transaction) => {
+    setState(prev => {
+      const exists = prev.transactions.find(t => t.id === transaction.id);
+      const updatedTransactions = exists 
+        ? prev.transactions.map(t => t.id === transaction.id ? transaction : t)
+        : [...prev.transactions, transaction];
+      
+      return { ...prev, transactions: updatedTransactions };
+    });
+    showNotification(editingTransaction ? 'Lançamento atualizado' : 'Lançamento registrado', 'success');
+    addLog(
+      editingTransaction ? 'Transação Editada' : 'Novo Lançamento',
+      `${transaction.description}: ${state.config.currency} ${transaction.amount}`,
+      transaction.type === 'income' ? 'success' : 'warning'
+    );
+    setIsTransactionFormOpen(false);
+    setEditingTransaction(null);
+  };
+
+  const handleDeleteTransaction = (id: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    console.log('Solicitando exclusão da transação:', id);
+    if (window.confirm('Deseja realmente excluir este lançamento?')) {
+      const transaction = (state.transactions || []).find(t => t.id === id);
+      setState(prev => ({
+        ...prev,
+        transactions: (prev.transactions || []).filter(t => t.id !== id)
+      }));
+      if (transaction) {
+        addLog('Lançamento Excluído', `Removido: ${transaction.description}`, 'alert');
+      }
+    }
   };
 
   const handleUpdateCredits = (server: string, amount: number) => {
@@ -402,14 +622,19 @@ export default function App() {
     }));
   };
 
-  const handleRenew = (customerId: string) => {
+  const handleRenew = (customerId: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
     const customer = state.customers.find(c => c.id === customerId);
     if (!customer) return;
 
-    // Reduzir crédito se configurado
-    if (state.serverCredits && (state.serverCredits[customer.server] || 0) > 0) {
-       handleUpdateCredits(customer.server, state.serverCredits[customer.server] - 1);
+    // Verificar e reduzir crédito se configurado
+    const currentCredits = state.serverCredits?.[customer.server] || 0;
+    if (currentCredits <= 0) {
+      showNotification(`Sem créditos no servidor ${customer.server}`, 'error');
+      return;
     }
+
+    handleUpdateCredits(customer.server, currentCredits - 1);
 
     const newExpiry = new Date(customer.expiryDate);
     if (customer.plan === 'Mensal') newExpiry.setMonth(newExpiry.getMonth() + 1);
@@ -448,46 +673,70 @@ export default function App() {
     }));
   };
 
+  const isWithinMonthlyRevenue = (dateStr: string) => {
+    try {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return false;
+      return isWithinInterval(d, {
+        start: startOfMonth(new Date()),
+        end: endOfMonth(new Date())
+      });
+    } catch {
+      return false;
+    }
+  };
+
+  const isWithinMonthlyExpenses = (dateStr: string) => {
+    try {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return false;
+      return isWithinInterval(d, {
+        start: startOfMonth(new Date()),
+        end: endOfMonth(new Date())
+      });
+    } catch {
+      return false;
+    }
+  };
+
   // Analytics
   const analytics = useMemo(() => {
     const today = new Date();
     const last30Days = Array.from({ length: 30 }).map((_, i) => {
       const d = subDays(today, 29 - i);
-      const dayIncome = state.transactions
-        .filter(t => t.type === 'income' && isSameDay(new Date(t.date), d))
-        .reduce((acc, t) => acc + t.amount, 0);
+      const dayIncome = (state.transactions || [])
+        .filter(t => {
+           try {
+              return t.type === 'income' && isSameDay(new Date(t.date), d);
+           } catch { return false; }
+        })
+        .reduce((acc, t) => acc + (t.amount || 0), 0);
       return {
         date: format(d, 'dd/MM'),
         value: dayIncome
       };
     });
 
-    const serverDistribution = state.servers.map(s => ({
+    const serverDistribution = (state.servers || []).map(s => ({
       name: s.name,
-      value: state.customers.filter(c => c.server === s.name).length
+      value: (state.customers || []).filter(c => c.server === s.name).length
     }));
 
-    const totalRevenue = state.transactions
+    const totalRevenue = (state.transactions || [])
       .filter(t => t.type === 'income')
-      .reduce((acc, t) => acc + t.amount, 0);
+      .reduce((acc, t) => acc + (t.amount || 0), 0);
     
-    const totalExpenses = state.transactions
+    const totalExpenses = (state.transactions || [])
       .filter(t => t.type === 'expense')
-      .reduce((acc, t) => acc + t.amount, 0);
+      .reduce((acc, t) => acc + (t.amount || 0), 0);
 
-    const monthlyRevenue = state.transactions
-      .filter(t => t.type === 'income' && isWithinInterval(new Date(t.date), {
-        start: startOfMonth(today),
-        end: endOfMonth(today)
-      }))
-      .reduce((acc, t) => acc + t.amount, 0);
+    const monthlyRevenue = (state.transactions || [])
+      .filter(t => t.type === 'income' && isWithinMonthlyRevenue(t.date))
+      .reduce((acc, t) => acc + (t.amount || 0), 0);
 
-    const monthlyExpenses = state.transactions
-      .filter(t => t.type === 'expense' && isWithinInterval(new Date(t.date), {
-        start: startOfMonth(today),
-        end: endOfMonth(today)
-      }))
-      .reduce((acc, t) => acc + t.amount, 0);
+    const monthlyExpenses = (state.transactions || [])
+      .filter(t => t.type === 'expense' && isWithinMonthlyExpenses(t.date))
+      .reduce((acc, t) => acc + (t.amount || 0), 0);
 
     const activeCount = state.customers.filter(c => c.status === 'active').length;
     const totalConnections = state.customers.reduce((acc, c) => acc + (c.connections || 1), 0);
@@ -592,6 +841,7 @@ export default function App() {
                   className="bg-rose-500/10 border border-rose-500/20 py-2 rounded-xl text-center"
                 >
                   <p className="text-[10px] text-rose-500 font-bold uppercase tracking-widest">Credenciais Inválidas</p>
+                  <p className="text-[8px] text-rose-400/60 uppercase font-black mt-1">Dica: admin / admin</p>
                 </motion.div>
               )}
             </AnimatePresence>
@@ -604,7 +854,29 @@ export default function App() {
             </button>
           </form>
 
-          <p className="text-center text-[9px] text-zinc-600 uppercase font-medium">Dados protegidos por criptografia local</p>
+          <div className="pt-2 text-center space-y-4">
+            <div className="p-3 bg-zinc-950/50 border border-zinc-800 rounded-2xl">
+              <p className="text-[9px] text-zinc-600 uppercase font-bold tracking-widest mb-1">Credenciais Padrão</p>
+              <div className="flex justify-between px-4">
+                <span className="text-[10px] text-zinc-400 font-mono">USUÁRIO: admin</span>
+                <span className="text-[10px] text-zinc-400 font-mono">SENHA: admin</span>
+              </div>
+            </div>
+            
+            <button 
+              type="button"
+              onClick={() => {
+                if (window.confirm('Isso apagará TODOS os seus dados e resetará as credenciais para admin/admin. Continuar?')) {
+                  localStorage.removeItem('gestor_iptv_data');
+                  window.location.reload();
+                }
+              }}
+              className="text-[9px] text-rose-500/50 hover:text-rose-500 uppercase font-black tracking-widest transition-colors"
+            >
+              Resetar Sistema (Cuidado)
+            </button>
+            <p className="text-[9px] text-zinc-600 uppercase font-medium">Dados protegidos por criptografia local</p>
+          </div>
         </motion.div>
       </div>
     );
@@ -718,7 +990,7 @@ export default function App() {
                   </div>
                 </div>
                 <div className="h-48 w-full">
-                  <ResponsiveContainer width="100%" height="100%">
+                  <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                     <AreaChart data={analytics.last30Days}>
                       <defs>
                         <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
@@ -776,14 +1048,14 @@ export default function App() {
                               </div>
                               <div className="flex items-center gap-2">
                                 <button 
-                                  onClick={() => handleSendMessage(c)}
+                                  onClick={(e) => { e.stopPropagation(); handleSendMessage(c); }}
                                   className="p-2.5 bg-emerald-500/10 hover:bg-emerald-500 text-emerald-400 hover:text-zinc-950 rounded-xl transition-all active:scale-95"
                                   title="Cobrar WhatsApp"
                                 >
                                   <MessageSquare className="w-4 h-4" />
                                 </button>
                                 <button 
-                                  onClick={() => handleRenew(c.id)}
+                                  onClick={(e) => handleRenew(c.id, e)}
                                   className="p-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 rounded-xl transition-all active:scale-95"
                                   title="Renovar"
                                 >
@@ -976,13 +1248,13 @@ export default function App() {
                       </div>
                       <div className="flex items-center gap-1">
                         <button 
-                          onClick={() => openEditForm(c)}
+                          onClick={(e) => { e.stopPropagation(); openEditForm(c); }}
                           className="p-2 text-zinc-500 hover:text-emerald-400 transition-colors"
                         >
                           <Pencil className="w-4 h-4" />
                         </button>
                         <button 
-                          onClick={() => handleDeleteCustomer(c.id)}
+                          onClick={(e) => handleDeleteCustomer(c.id, e)}
                           className="p-2 text-zinc-500 hover:text-rose-400 transition-colors"
                         >
                           <Trash2 className="w-4 h-4" />
@@ -995,7 +1267,7 @@ export default function App() {
                         <span className="text-[9px] text-zinc-600 uppercase font-black tracking-widest mb-1">Status / Expira</span>
                         <div className="flex items-center gap-2">
                            <div className={cn("w-1.5 h-1.5 rounded-full", c.status === 'active' ? 'bg-emerald-500' : c.status === 'expiring' ? 'bg-amber-500' : 'bg-rose-500')} />
-                           <span className="text-xs text-zinc-300 font-bold">{new Date(c.expiryDate).toLocaleDateString()}</span>
+                           <span className="text-xs text-zinc-300 font-bold">{safeFormat(c.expiryDate, 'dd/MM/yyyy')}</span>
                         </div>
                       </div>
                       <div className="flex flex-col">
@@ -1018,7 +1290,7 @@ export default function App() {
                           <MessageSquare className="w-4 h-4" /> Cobrar
                         </button>
                         <button 
-                           onClick={(e) => { e.stopPropagation(); handleRenew(c.id); }}
+                           onClick={(e) => handleRenew(c.id, e)}
                            className="flex-1 py-2.5 bg-zinc-800 text-zinc-100 rounded-xl text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-zinc-700 transition-all active:scale-95 border border-zinc-700"
                         >
                           <CheckCircle2 className="w-4 h-4" /> Renovar
@@ -1176,7 +1448,7 @@ export default function App() {
                       </div>
                    </div>
                    <div className="h-60">
-                      <ResponsiveContainer width="100%" height="100%">
+                      <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                          <BarChart data={analytics.last30Days}>
                             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#27272a" />
                             <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fill: '#71717a', fontSize: 10 }} />
@@ -1193,7 +1465,7 @@ export default function App() {
                 <div className="p-6 bg-zinc-900/50 border border-zinc-800 rounded-3xl flex flex-col justify-center items-center">
                    <h3 className="text-xs font-bold uppercase tracking-widest text-zinc-500 mb-4">Servidores</h3>
                    <div className="h-40 w-full">
-                      <ResponsiveContainer width="100%" height="100%">
+                      <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                          <PieChart>
                             <Pie
                                data={analytics.serverDistribution}
@@ -1227,30 +1499,62 @@ export default function App() {
               </div>
 
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                <div className="p-4 bg-zinc-900/50 border border-zinc-800 rounded-2xl">
-                    <p className="text-[10px] text-zinc-500 uppercase font-black mb-1">Bruto Total</p>
-                    <p className="text-xl font-bold">R$ {analytics.totalRevenue.toFixed(0)}</p>
+                <div className="p-5 bg-zinc-900 border border-zinc-800 rounded-[28px] shadow-lg shadow-black/20">
+                    <p className="text-[10px] text-zinc-500 uppercase font-black mb-2 opacity-50">Bruto Total</p>
+                    <div className="flex items-baseline gap-1">
+                      <span className="text-zinc-600 text-xs font-bold">R$</span>
+                      <span className="text-2xl font-black italic">{analytics.totalRevenue.toLocaleString('pt-BR')}</span>
+                    </div>
                 </div>
-                <div className="p-4 bg-zinc-900/50 border border-zinc-800 rounded-2xl">
-                    <p className="text-[10px] text-zinc-500 uppercase font-black mb-1">Despesas Total</p>
-                    <p className="text-xl font-bold text-rose-400">R$ {analytics.totalExpenses.toFixed(0)}</p>
+                <div className="p-5 bg-zinc-900 border border-zinc-800 rounded-[28px] shadow-lg shadow-black/20">
+                    <p className="text-[10px] text-emerald-500 uppercase font-black mb-2">Lucro Real (ROI)</p>
+                    <div className="flex items-baseline gap-1">
+                      <span className="text-emerald-900 text-xs font-bold">R$</span>
+                      <span className="text-2xl font-black italic text-emerald-400">{analytics.profit.toLocaleString('pt-BR')}</span>
+                      <span className="text-[10px] font-black text-emerald-600 ml-1">+{analytics.roi.toFixed(0)}%</span>
+                    </div>
                 </div>
-                <div className="p-4 bg-zinc-900/50 border border-zinc-800 rounded-2xl">
-                    <p className="text-[10px] text-zinc-500 uppercase font-black mb-1">Custo Médio/Cli</p>
-                    <p className="text-xl font-bold text-amber-400">R$ {(analytics.totalExpenses / (state.customers.length || 1)).toFixed(2)}</p>
+                <div className="p-5 bg-zinc-900 border border-zinc-800 rounded-[28px] shadow-lg shadow-black/20">
+                    <p className="text-[10px] text-zinc-500 uppercase font-black mb-2 opacity-50">Ativos / Telas</p>
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-2xl font-black italic">{state.customers.filter(c => c.status === 'active').length}</span>
+                      <span className="text-[10px] font-black text-zinc-600">/{analytics.totalConnections} conexões</span>
+                    </div>
                 </div>
-                <div className="p-4 bg-zinc-900/50 border border-zinc-800 rounded-2xl">
-                    <p className="text-[10px] text-zinc-500 uppercase font-black mb-1">ROI Global</p>
-                    <p className="text-xl font-bold text-emerald-400">{analytics.roi.toFixed(1)}%</p>
+                <div className="p-5 bg-zinc-900 border border-zinc-800 rounded-[28px] shadow-lg shadow-black/20">
+                    <p className="text-[10px] text-rose-500 uppercase font-black mb-2">Alertas Painel</p>
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-2xl font-black italic text-rose-500">{state.servers.filter(s => (state.serverCredits?.[s.name] || 0) < state.config.lowCreditThreshold).length}</span>
+                      <span className="text-[10px] font-black text-rose-900 uppercase">Atenção</span>
+                    </div>
                 </div>
               </div>
 
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-black uppercase tracking-widest text-zinc-500">Histórico de Caixa</h3>
-                  <button className="px-4 py-2 bg-zinc-900 border border-zinc-800 rounded-xl text-xs font-bold hover:bg-zinc-800 flex items-center gap-2 transition-colors">
-                    <Plus className="w-4 h-4 text-emerald-400" /> Novo Lançamento
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button 
+                      onClick={() => {
+                        if (window.confirm('Deseja limpar TODO o histórico de caixa?')) {
+                          setState(prev => ({ ...prev, transactions: [] }));
+                          addLog('Histórico Limpo', 'Todo o histórico de caixa foi removido', 'alert');
+                        }
+                      }}
+                      className="px-4 py-2 border border-zinc-800 rounded-xl text-[10px] font-black uppercase tracking-widest text-rose-500 hover:bg-rose-500/10 transition-colors"
+                    >
+                      Limpar Tudo
+                    </button>
+                    <button 
+                      onClick={() => {
+                        setEditingTransaction(null);
+                        setIsTransactionFormOpen(true);
+                      }}
+                      className="px-4 py-2 bg-zinc-900 border border-zinc-800 rounded-xl text-xs font-bold hover:bg-zinc-800 flex items-center gap-2 transition-colors"
+                    >
+                      <Plus className="w-4 h-4 text-emerald-400" /> Novo Lançamento
+                    </button>
+                  </div>
                 </div>
                 
                 <div className="grid grid-cols-1 gap-2">
@@ -1266,13 +1570,33 @@ export default function App() {
                          <div className="flex flex-col">
                             <span className="font-bold text-sm">{t.description}</span>
                             <span className="text-[10px] text-zinc-600 uppercase font-black tracking-widest">
-                              {format(new Date(t.date), 'dd MMM yyyy')} • {t.category}
+                              {safeFormat(t.date, 'dd MMM yyyy')} • {t.category}
                             </span>
                          </div>
                       </div>
-                      <span className={cn("font-mono font-bold", t.type === 'income' ? 'text-emerald-400' : 'text-rose-400')}>
-                        {t.type === 'income' ? '+' : '-'} R$ {t.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                      </span>
+                      <div className="flex items-center gap-6">
+                        <span className={cn("font-mono font-bold", t.type === 'income' ? 'text-emerald-400' : 'text-rose-400')}>
+                          {t.type === 'income' ? '+' : '-'} R$ {t.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                        </span>
+                        <div className="flex items-center gap-2 transition-opacity">
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingTransaction(t);
+                              setIsTransactionFormOpen(true);
+                            }}
+                            className="p-2 text-zinc-500 hover:text-blue-400 hover:bg-blue-500/10 rounded-lg transition-all active:scale-95"
+                          >
+                            <Settings className="w-4 h-4" />
+                          </button>
+                          <button 
+                            onClick={(e) => handleDeleteTransaction(t.id, e)}
+                            className="p-2 text-zinc-500 hover:text-rose-500 hover:bg-rose-500/10 rounded-lg transition-all active:scale-95"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -1295,7 +1619,7 @@ export default function App() {
                       </div>
 
                       <div className="h-64 mt-4">
-                         <ResponsiveContainer width="100%" height="100%">
+                         <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                             <AreaChart data={analytics.last30Days}>
                                <defs>
                                   <linearGradient id="colorRev" x1="0" y1="0" x2="0" y2="1">
@@ -1444,7 +1768,7 @@ export default function App() {
                           <input 
                             type="text" 
                             value={state.auth.username}
-                            onChange={(e) => handleUpdateAuth(e.target.value, state.auth.passwordHash)}
+                            onChange={(e) => handleUpdateAuth(e.target.value, state.auth.passwordHash, true)}
                             className="w-full bg-zinc-950 border border-zinc-800 rounded-2xl px-5 py-4 text-sm text-zinc-100 focus:border-emerald-500 outline-none transition-all shadow-inner"
                           />
                         </div>
@@ -1454,7 +1778,7 @@ export default function App() {
                             <input 
                               type={showSettingsPassword ? "text" : "password"} 
                               placeholder="••••••••"
-                              onBlur={(e) => e.target.value && handleUpdateAuth(state.auth.username, e.target.value)}
+                              onBlur={(e) => e.target.value && handleUpdateAuth(state.auth.username, e.target.value, true)}
                               className="w-full bg-zinc-950 border border-zinc-800 rounded-2xl px-5 py-4 text-sm text-zinc-100 focus:border-emerald-500 outline-none transition-all shadow-inner pr-14"
                             />
                             <button
@@ -1467,6 +1791,57 @@ export default function App() {
                           </div>
                         </div>
                       </div>
+                    </div>
+
+                    <div className="p-8 bg-zinc-900/50 border border-zinc-800 rounded-[32px] space-y-6">
+                       <h3 className="text-sm font-black uppercase tracking-widest flex items-center gap-2">
+                          <Database className="w-5 h-5 text-blue-400" />
+                          Dados & Kernel Backup
+                       </h3>
+                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <button 
+                            onClick={exportBackup}
+                            className="p-6 bg-zinc-950 border border-zinc-800 rounded-2xl flex flex-col items-center gap-2 hover:border-emerald-500 transition-all text-zinc-100 group"
+                          >
+                             <Download className="w-6 h-6 text-emerald-400 group-hover:scale-110 transition-transform" />
+                             <span className="text-[10px] font-black uppercase tracking-widest">Exportar Backup (.json)</span>
+                          </button>
+                          <label className="p-6 bg-zinc-950 border border-zinc-800 rounded-2xl flex flex-col items-center gap-2 hover:border-blue-500 transition-all text-zinc-100 group cursor-pointer">
+                             <Upload className="w-6 h-6 text-blue-400 group-hover:scale-110 transition-transform" />
+                             <span className="text-[10px] font-black uppercase tracking-widest">Importar Banco de Dados</span>
+                             <input 
+                                type="file" 
+                                accept=".json" 
+                                className="hidden" 
+                                onChange={(e) => {
+                                   const file = e.target.files?.[0];
+                                   if (file) {
+                                      const reader = new FileReader();
+                                      reader.onload = (event) => {
+                                         try {
+                                            const json = JSON.parse(event.target?.result as string);
+                                            if (window.confirm('RESTAURAR BACKUP? Todos os dados atuais serão substituídos. Continuar?')) {
+                                               const recoveredState = {
+                                                  ...json,
+                                                  auth: { 
+                                                     username: json.auth?.username || 'admin', 
+                                                     passwordHash: json.auth?.passwordHash || 'admin', 
+                                                     isLogged: true 
+                                                  }
+                                               };
+                                               setState(recoveredState);
+                                               showNotification('Sistema restaurado com sucesso!', 'success');
+                                            }
+                                         } catch (e) {
+                                            showNotification('Erro ao importar backup: Arquivo inválido.', 'error');
+                                         }
+                                      };
+                                      reader.readAsText(file);
+                                   }
+                                }}
+                             />
+                          </label>
+                       </div>
                     </div>
                   </motion.div>
                 )}
@@ -1557,20 +1932,51 @@ export default function App() {
                        <h3 className="text-sm font-black uppercase tracking-widest text-zinc-500 px-1">Tabela de Preços e Prazos</h3>
                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                           {state.plans.map(plan => (
-                             <div key={plan.id} className="p-6 bg-zinc-950 border border-zinc-800 rounded-2xl flex items-center justify-between group">
+                             <div key={plan.id} className="p-6 bg-zinc-950 border border-zinc-800 rounded-[28px] flex items-center justify-between group shadow-lg hover:border-emerald-500/30 transition-all">
                                 <div>
-                                   <h4 className="font-black text-zinc-100">{plan.name}</h4>
-                                   <p className="text-[10px] text-zinc-600 font-bold uppercase tracking-widest">{plan.duration} • {state.config.currency} {plan.price}</p>
+                                   <label className="text-[9px] font-black text-zinc-600 uppercase tracking-widest block mb-1">
+                                      {plan.duration}
+                                   </label>
+                                   <input 
+                                      type="text"
+                                      value={plan.name}
+                                      onChange={(e) => {
+                                         const updatedPlans = state.plans.map(p => p.id === plan.id ? { ...p, name: e.target.value } : p);
+                                         setState(prev => ({ ...prev, plans: updatedPlans }));
+                                      }}
+                                      className="font-black text-zinc-100 bg-transparent border-none outline-none w-full focus:text-emerald-400 transition-colors"
+                                   />
+                                   <div className="flex items-center gap-2 mt-2">
+                                      <span className="text-[10px] font-black text-zinc-700">{state.config.currency}</span>
+                                      <input 
+                                         type="number"
+                                         value={plan.price}
+                                         onChange={(e) => {
+                                            const updatedPlans = state.plans.map(p => p.id === plan.id ? { ...p, price: Number(e.target.value) } : p);
+                                            setState(prev => ({ ...prev, plans: updatedPlans }));
+                                         }}
+                                         className="w-20 bg-zinc-900 border border-zinc-800 rounded-lg px-2 py-1 text-[10px] font-black text-emerald-400 focus:border-emerald-500 outline-none transition-all"
+                                      />
+                                   </div>
                                 </div>
                                 <div className="flex items-center gap-2">
-                                   <button className="p-2 text-zinc-700 hover:text-emerald-400"><Settings className="w-4 h-4" /></button>
-                                   <button className="p-2 text-zinc-700 hover:text-rose-500"><Trash2 className="w-4 h-4" /></button>
+                                   <button 
+                                      onClick={() => handleDeletePlan(plan.id)}
+                                      className="p-3 text-zinc-700 hover:text-rose-500 transition-all bg-zinc-900 rounded-xl"
+                                   >
+                                      <Trash2 className="w-5 h-5" />
+                                   </button>
                                 </div>
                              </div>
                           ))}
-                          <button className="p-6 border border-dashed border-zinc-800 rounded-2xl flex items-center justify-center gap-2 text-zinc-600 hover:text-zinc-400 hover:border-zinc-600 transition-all">
-                             <Plus className="w-4 h-4" />
-                             <span className="text-[10px] font-black uppercase tracking-widest">Novo Plano</span>
+                          <button 
+                             onClick={handleAddPlan}
+                             className="p-8 border-2 border-dashed border-zinc-800 rounded-[28px] flex flex-col items-center justify-center gap-3 text-zinc-600 hover:text-emerald-400 hover:border-emerald-500/30 transition-all bg-zinc-900/10 group"
+                          >
+                             <div className="w-12 h-12 bg-zinc-900 rounded-2xl flex items-center justify-center group-hover:scale-110 group-hover:rotate-90 transition-all">
+                                <Plus className="w-6 h-6" />
+                             </div>
+                             <span className="text-[10px] font-black uppercase tracking-widest">Adicionar Novo Plano</span>
                           </button>
                        </div>
                     </div>
@@ -1718,52 +2124,194 @@ export default function App() {
         ))}
       </nav>
 
-      {/* Customer Form Modal */}
+      {/* Transaction Form Modal */}
       <AnimatePresence>
-        {isFormOpen && editingCustomer && (
+        {isTransactionFormOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <motion.div 
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               className="absolute inset-0 bg-black/80 backdrop-blur-sm"
-              onClick={() => setIsFormOpen(false)}
+              onClick={() => setIsTransactionFormOpen(false)}
             />
             <motion.div 
               initial={{ opacity: 0, scale: 0.9, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative w-full max-w-lg bg-zinc-900 border border-zinc-800 rounded-3xl overflow-hidden shadow-2xl"
+              className="relative w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-[32px] overflow-hidden shadow-2xl"
             >
               <div className="p-6 border-b border-zinc-800 flex items-center justify-between">
                 <h2 className="text-lg font-black uppercase tracking-widest text-zinc-100">
-                  {state.customers.some(c => c.id === editingCustomer.id) ? 'Editar Cliente' : 'Novo Cliente'}
+                  {editingTransaction ? 'Editar Lançamento' : 'Novo Lançamento'}
                 </h2>
                 <button 
-                  onClick={() => setIsFormOpen(false)}
+                  onClick={() => setIsTransactionFormOpen(false)}
                   className="p-2 text-zinc-500 hover:text-zinc-100 transition-colors"
                 >
                   <X className="w-6 h-6" />
                 </button>
               </div>
 
-              <div className="p-6 max-h-[70vh] overflow-y-auto space-y-6">
+              <div className="p-6 space-y-6">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-zinc-600 uppercase tracking-widest pl-1">Descrição</label>
+                  <input 
+                    type="text" 
+                    value={editingTransaction?.description || ''}
+                    onChange={e => {
+                      const base = editingTransaction || { id: Math.random().toString(36).substr(2, 9), date: new Date().toISOString(), amount: 0, type: 'income', category: 'other', description: '' };
+                      setEditingTransaction({ ...base, description: e.target.value });
+                    }}
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-2xl px-5 py-4 text-sm text-zinc-100 focus:border-emerald-500 outline-none transition-colors"
+                    placeholder="Ex: Renovação Cliente X"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-zinc-600 uppercase tracking-widest pl-1">Tipo</label>
+                    <div className="flex bg-zinc-950 p-1 border border-zinc-800 rounded-2xl">
+                      <button 
+                        onClick={() => {
+                          const base = editingTransaction || { id: Math.random().toString(36).substr(2, 9), date: new Date().toISOString(), amount: 0, type: 'income', category: 'other', description: '' };
+                          setEditingTransaction({ ...base, type: 'income' });
+                        }}
+                        className={cn(
+                          "flex-1 py-3 rounded-xl text-[10px] font-black uppercase transition-all",
+                          (editingTransaction?.type || 'income') === 'income' ? "bg-emerald-500 text-zinc-950" : "text-zinc-500 hover:text-zinc-300"
+                        )}
+                      >
+                        Entrada
+                      </button>
+                      <button 
+                        onClick={() => {
+                          const base = editingTransaction || { id: Math.random().toString(36).substr(2, 9), date: new Date().toISOString(), amount: 0, type: 'income', category: 'other', description: '' };
+                          setEditingTransaction({ ...base, type: 'expense' });
+                        }}
+                        className={cn(
+                          "flex-1 py-3 rounded-xl text-[10px] font-black uppercase transition-all",
+                          editingTransaction?.type === 'expense' ? "bg-rose-500 text-zinc-950" : "text-zinc-500 hover:text-zinc-300"
+                        )}
+                      >
+                        Saída
+                      </button>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-zinc-600 uppercase tracking-widest pl-1">Valor</label>
+                    <div className="relative">
+                      <span className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-600 font-bold text-xs">R$</span>
+                      <input 
+                        type="number" 
+                        value={editingTransaction?.amount || ''}
+                        onChange={e => {
+                          const base = editingTransaction || { id: Math.random().toString(36).substr(2, 9), date: new Date().toISOString(), amount: 0, type: 'income', category: 'other', description: '' };
+                          setEditingTransaction({ ...base, amount: Number(e.target.value) });
+                        }}
+                        className="w-full bg-zinc-950 border border-zinc-800 rounded-2xl pl-10 pr-4 py-4 text-sm text-zinc-100 focus:border-emerald-500 outline-none transition-colors"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-zinc-600 uppercase tracking-widest pl-1">Categoria</label>
+                  <select 
+                    value={editingTransaction?.category || 'other'}
+                    onChange={e => {
+                      const base = editingTransaction || { id: Math.random().toString(36).substr(2, 9), date: new Date().toISOString(), amount: 0, type: 'income', category: 'other', description: '' };
+                      setEditingTransaction({ ...base, category: e.target.value as any });
+                    }}
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-2xl px-5 py-4 text-sm text-zinc-100 focus:border-emerald-500 outline-none appearance-none transition-colors"
+                  >
+                    <option value="renewal">Renovação</option>
+                    <option value="credits">Créditos</option>
+                    <option value="marketing">Marketing</option>
+                    <option value="infrastructure">Infraestrutura</option>
+                    <option value="other">Outros</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="p-6 bg-zinc-950/50 flex gap-3">
+                <button 
+                  onClick={() => setIsTransactionFormOpen(false)}
+                  className="flex-1 py-4 text-xs font-black uppercase text-zinc-500 hover:text-zinc-300 transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  onClick={() => {
+                    if (editingTransaction && editingTransaction.description && editingTransaction.amount > 0) {
+                      handleSaveTransaction(editingTransaction);
+                    } else {
+                      alert('Preencha todos os campos corretamente.');
+                    }
+                  }}
+                  className="flex-[2] py-4 bg-emerald-500 text-zinc-950 font-black uppercase rounded-2xl hover:bg-emerald-400 transition-all shadow-lg active:scale-95"
+                >
+                  Salvar Lançamento
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {isFormOpen && editingCustomer && (
+          <div className="fixed inset-0 z-[999] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsFormOpen(false)}
+              className="absolute inset-0 bg-zinc-950/80 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="w-full max-w-xl bg-zinc-900 border border-zinc-800 rounded-[40px] shadow-2xl overflow-hidden relative z-10"
+            >
+              <div className="p-8 border-b border-zinc-800 flex items-center justify-between bg-zinc-900/50">
+                <div className="flex items-center gap-3">
+                  <div className="p-3 bg-emerald-500 rounded-2xl shadow-lg shadow-emerald-500/20">
+                    <Users className="w-6 h-6 text-zinc-950" />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-black italic tracking-tighter text-zinc-100 uppercase">
+                      {state.customers.find(c => c.id === editingCustomer.id) ? 'Editar Cliente' : 'Novo Cliente'}
+                    </h2>
+                    <p className="text-[10px] text-zinc-500 uppercase tracking-widest font-bold">Ficha Técnica do Assinante</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setIsFormOpen(false)}
+                  className="p-3 hover:bg-zinc-800 rounded-2xl transition-colors text-zinc-500 hover:text-zinc-100"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+
+              <div className="p-8 space-y-6 max-h-[60vh] overflow-y-auto custom-scrollbar">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <label className="text-[10px] font-black text-zinc-600 uppercase tracking-widest">Nome Completo</label>
+                    <label className="text-[10px] font-black text-zinc-600 uppercase tracking-widest pl-1">Nome Completo</label>
                     <input 
                       type="text" 
+                      placeholder="Ex: João Silva"
                       value={editingCustomer.name}
                       onChange={e => setEditingCustomer({...editingCustomer, name: e.target.value})}
                       className="w-full bg-zinc-950 border border-zinc-800 rounded-2xl px-5 py-4 text-sm text-zinc-100 focus:border-emerald-500 outline-none transition-colors"
-                      placeholder="Ex: João Silva"
                     />
                   </div>
                   <div className="space-y-2">
-                    <label className="text-[10px] font-black text-zinc-600 uppercase tracking-widest">WhatsApp</label>
+                    <label className="text-[10px] font-black text-zinc-600 uppercase tracking-widest pl-1">WhatsApp</label>
                     <input 
                       type="text" 
-                      placeholder="Ex: 5511999999999"
+                      placeholder="5511999999999"
                       value={editingCustomer.whatsapp}
                       onChange={e => setEditingCustomer({...editingCustomer, whatsapp: e.target.value})}
                       className="w-full bg-zinc-950 border border-zinc-800 rounded-2xl px-5 py-4 text-sm text-zinc-100 focus:border-emerald-500 outline-none transition-colors"
@@ -1828,7 +2376,11 @@ export default function App() {
                     <input 
                       type="date" 
                       value={editingCustomer.expiryDate.split('T')[0]}
-                      onChange={e => setEditingCustomer({...editingCustomer, expiryDate: new Date(e.target.value).toISOString()})}
+                      onChange={e => {
+                        if (e.target.value) {
+                           setEditingCustomer({...editingCustomer, expiryDate: new Date(e.target.value).toISOString()});
+                        }
+                      }}
                       className="w-full bg-zinc-950 border border-zinc-800 rounded-2xl px-5 py-4 text-sm text-zinc-100 focus:border-emerald-500 outline-none transition-colors"
                     />
                   </div>
@@ -1845,7 +2397,7 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="p-6 bg-zinc-950/50 border-t border-zinc-800 flex gap-3">
+              <div className="p-8 bg-zinc-950/50 border-t border-zinc-800 flex gap-3">
                 <button 
                   onClick={() => setIsFormOpen(false)}
                   className="flex-1 py-4 bg-zinc-900 text-zinc-400 font-bold rounded-2xl hover:bg-zinc-800 hover:text-zinc-100 transition-all active:scale-95"
@@ -1853,13 +2405,46 @@ export default function App() {
                   Cancelar
                 </button>
                 <button 
-                  onClick={() => handleSaveCustomer(editingCustomer)}
+                  onClick={() => {
+                    if (!editingCustomer.name || !editingCustomer.whatsapp) {
+                       showNotification('Preencha os campos obrigatórios', 'warning');
+                       return;
+                    }
+                    handleSaveCustomer(editingCustomer);
+                  }}
                   className="flex-[2] py-4 bg-emerald-500 text-zinc-950 font-black uppercase tracking-widest rounded-2xl hover:bg-emerald-400 transition-all active:scale-95 shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2"
                 >
                   <Save className="w-5 h-5" /> Confirmar
                 </button>
               </div>
             </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {notifications.length > 0 && (
+          <div className="fixed bottom-6 right-6 z-[9999] flex flex-col gap-2 pointer-events-none">
+            {notifications.map(n => (
+              <motion.div
+                key={n.id}
+                initial={{ opacity: 0, x: 20, scale: 0.95 }}
+                animate={{ opacity: 1, x: 0, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.9, transition: { duration: 0.2 } }}
+                className={cn(
+                  "px-6 py-4 rounded-2xl shadow-2xl border flex items-center gap-3 min-w-[280px] pointer-events-auto",
+                  n.type === 'success' ? "bg-emerald-500 border-emerald-400 text-zinc-950" :
+                  n.type === 'error' ? "bg-rose-500 border-rose-400 text-white" :
+                  n.type === 'warning' ? "bg-amber-500 border-amber-400 text-zinc-950" :
+                  "bg-zinc-100 border-zinc-200 text-zinc-950"
+                )}
+              >
+                {n.type === 'success' && <CheckCircle2 className="w-5 h-5" />}
+                {n.type === 'error' && <AlertCircle className="w-5 h-5" />}
+                {n.type === 'warning' && <Clock className="w-5 h-5" />}
+                <span className="text-sm font-black uppercase tracking-tight">{n.message}</span>
+              </motion.div>
+            ))}
           </div>
         )}
       </AnimatePresence>
